@@ -1,0 +1,80 @@
+services:
+  guac-init:
+    image: guacamole/guacamole:1.6.0
+    entrypoint: ["/bin/sh", "-lc"]
+    command: ["/opt/guacamole/bin/initdb.sh --postgresql > /initdb/01-initdb.sql"]
+    volumes:
+      - guac-initdb:/initdb
+    restart: "no"
+
+  database:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: guacamole_db
+      POSTGRES_USER: guacamole_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD in .env}
+    volumes:
+      - guac-db:/var/lib/postgresql/data
+      - guac-initdb:/docker-entrypoint-initdb.d:ro
+    depends_on:
+      guac-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U guacamole_user -d guacamole_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  guacd:
+    image: guacamole/guacd:1.6.0
+    restart: unless-stopped
+
+  guacamole:
+    image: guacamole/guacamole:1.6.0
+    restart: unless-stopped
+    environment:
+      GUACD_HOSTNAME: guacd
+      POSTGRESQL_ENABLED: "true"
+      POSTGRESQL_HOSTNAME: database
+      POSTGRESQL_DATABASE: guacamole_db
+      POSTGRESQL_USERNAME: guacamole_user
+      POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD in .env}
+    depends_on:
+      database:
+        condition: service_healthy
+      guacd:
+        condition: service_started
+    expose:
+      - "8080"
+
+  portal:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./portal:/usr/share/nginx/html:ro
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Configure DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - portal
+      - guacamole
+
+volumes:
+  guac-db:
+  guac-initdb:
+  caddy-data:
+  caddy-config:
